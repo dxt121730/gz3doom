@@ -1288,13 +1288,18 @@ static void TriggerWeaponVibe(int device,std::string weapName,bool bPassive)
 	{
 		double deltaTime;
 		if (iter->second.bPassive) {
-			double deltaTimePassive = double(currTime - startPassive);
-			startPassive = deltaTimePassive >= iter->second.duration ? GetCurrTime() : startPassive;
+			deltaTime = double(currTime - startPassive);
+			if (iter->second.bTicMode)
+				deltaTime /= 24;
+			startPassive = deltaTime >= iter->second.duration ? GetCurrTime() : startPassive;
 		}
 		else
 		{
-			double deltaTime = double(currTime - startTime);
+			deltaTime = double(currTime - startTime);
+			if (iter->second.bTicMode)
+				deltaTime /= 24;
 		}
+
 		double intensity;
 		for each (vibeFunc def in iter->second.vibes)
 		{
