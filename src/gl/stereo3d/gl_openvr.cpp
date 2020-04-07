@@ -27,8 +27,12 @@
 
 #ifdef USE_OPENVR
 
+
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <map>
+#include <filesystem>
 #include "gl_load/gl_system.h"
 #include "doomtype.h" // Printf
 #include "d_player.h"
@@ -51,14 +55,18 @@
 #include "i_time.h"
 #include "hwrenderer/data/flatvertices.h"
 #include "hwrenderer/data/hw_viewpointbuffer.h"
+#include "info.h"
+
 
 #include "gl_openvr.h"
 #include "openvr_include.h"
 using namespace openvr;
-
+namespace fs = std::filesystem;
 namespace openvr {
 #include "openvr.h"
 }
+
+
 
 void I_StartupOpenVR();
 double P_XYMovement(AActor *mo, DVector2 scroll);
@@ -180,10 +188,113 @@ static bool identifiedAxes = false;
 LSVec3 openvr_dpos(0,0,0);
 DAngle openvr_to_doom_angle;
 
-namespace s3d 
+namespace s3d
 {
+	struct vibeFunc {
+		int start_time = 0;
+		int end_time = 0;
+		double coeff = 0;
+		int intercept = 0;
+	};
+	struct vibeDef {
+		int duration;
+		std::string weaponName;
+		bool bPassive = true;
+		bool bTicMode = true;
+		std::vector<vibeFunc> vibes;
+	};
+	std::map < std::string,struct vibeDef> vibeDefs;
+	std::map < std::string,struct vibeDef> vibePassives;
+	
+	static void LoadVibeDefs()
+	{
+		std::ifstream inFile;
+		
+		std::string path("./Exports/");
+		std::string ext(".vibe");
+		std::vector<std::string> vibeFiles;
+		for (const auto& entry : fs::directory_iterator(path))
+			vibeFiles.push_back(entry.path().string());
+		for each (std::string pathStr in vibeFiles)
+		{
+			if (pathStr.find(ext) == std::string::npos)
+				continue;
+			inFile.open(pathStr);
+			if (!inFile) {
+				Printf("%s not found\n", path.c_str());
+			}
+			else {
+				vibeDef vibe;
+				std::string currLine;
+				while (std::getline(inFile, currLine))
+				{
+					std::istringstream lineStream(currLine);
+					std::string str;
+
+					std::vector<std::string> strVec;
+					//int i = 0;
+					while (std::getline(lineStream, str, ';'))
+					{
+						str.erase(std::remove_if(str.begin(), str.end(), ::isspace), str.end());
+						strVec.push_back(str);
+					}
+					if (strVec[0]._Equal("NAME"))
+					{
+						if (strVec.size() != 2)
+							continue;
+						vibe.weaponName = strVec[1];
+					}
+					else if (strVec[0]._Equal("DURATION")) {
+						if (strVec.size() != 2)
+							continue;
+						vibe.duration = std::stoi(strVec[1]);
+					}
+					else if (strVec[0]._Equal("PASSIVE")) {
+						if (strVec.size() != 2)
+							continue;
+						vibe.bPassive = strVec[1]._Equal("TRUE");
+					}
+					else if (strVec[0]._Equal("TICS")) {
+						if (strVec.size() != 2)
+							continue;
+						vibe.bTicMode = strVec[1]._Equal("TRUE");
+					}
+					else if (strVec[0]._Equal("VIBEDEF")) {
+						if (strVec.size() < 5)
+							continue;
+						vibeFunc func;
+						func.start_time = std::stoi(strVec[1]);
+						func.end_time = std::stoi(strVec[2]);
+						func.coeff = std::stod(strVec[3]);
+						func.intercept = std::stoi(strVec[4]);
+						vibe.vibes.push_back(func);
+					}
+				}
+				if (!vibe.bPassive)
+				{
+					vibeDefs[vibe.weaponName] = vibe;
+
+				}
+
+				else
+				{
+					vibePassives[vibe.weaponName] = vibe;
+
+				}
+			}
+		}
+
+	}
+	
+
+	int lastVibe = 0;
+	int weaponVibe = -9999;
+	int lastRefire = 0;
+
+	static VR_IVRSystem_FnTable* vr_ptr;
 	static LSVec3 openvr_origin(0, 0, 0);
 	static float deltaYawDegrees;
+	
 	
 	class FControllerTexture : public FTexture
 	{
@@ -778,7 +889,7 @@ OpenVRMode::OpenVRMode(OpenVREyePose eyes[2])
 	, crossHairDrawer(new F2DDrawer)
 {
 	//eye_ptrs.Push(&leftEyeView); // initially default behavior to Mono non-stereo rendering
-
+	LoadVibeDefs();
 	leftEyeView = &eyes[0];
 	rightEyeView = &eyes[1];
 	mEyes[0] = &eyes[0];
@@ -807,7 +918,7 @@ OpenVRMode::OpenVRMode(OpenVREyePose eyes[2])
 	vrSystem = (VR_IVRSystem_FnTable*) VR_GetGenericInterface(sys_key.c_str() , &eError);
 	if (vrSystem == nullptr)
 		return;
-
+	vr_ptr = vrSystem;
 	vrSystem->GetRecommendedRenderTargetSize(&sceneWidth, &sceneHeight);
 
 	leftEyeView->initialize(vrSystem);
@@ -1131,6 +1242,202 @@ static void HandleUIVRButton(VRControllerState_t& lastState, VRControllerState_t
 	Joy_GenerateUIButtonEvents((lastState.ulButtonPressed & (1LL << vrindex)) ? 1 : 0, (newState.ulButtonPressed & (1LL << vrindex)) ? 1 : 0, 1, &doomkey);
 }
 
+
+
+static int GetCurrTime() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+int startTime = 0;
+
+
+static void ReportDetails(int device, std::string weapName, bool bPassive)
+{
+	std::map<std::string, vibeDef>::iterator iter = bPassive ? vibePassives.find(weapName) : vibeDefs.find(weapName);
+	int currTime = GetCurrTime();
+	//std::map<std::string, vibeDef>::iterator vP_iter = vibePassives.find(weapName);
+	if ((!bPassive && iter != vibeDefs.end()) || (bPassive && iter != vibePassives.end()))
+	{
+		Printf(iter->second.weaponName.c_str());
+		Printf(iter->second.bPassive ? "\n PASSIVE: TRUE" : " PASSIVE: FALSE");
+		Printf(iter->second.bTicMode ? " TICMODE: TRUE" : " TICMODE: FALSE");
+		Printf("\n");
+		Printf("VIBEDEFS: \n");
+		for (int i = 0; i < iter->second.vibes.size(); i++) {
+			Printf("VIBEDEF=> START: ");
+			Printf(std::to_string(iter->second.vibes[i].start_time).c_str());
+			Printf(" END: ");
+			Printf(std::to_string(iter->second.vibes[i].end_time).c_str());
+			Printf(" COEFF: ");
+			Printf(std::to_string(iter->second.vibes[i].coeff).c_str());
+			Printf(" INTERCEPT: ");
+			Printf(std::to_string(iter->second.vibes[i].intercept).c_str());
+			Printf("\n");
+		}
+		Printf("DONE");
+	}
+}
+int startPassive;
+static void TriggerWeaponVibe(int device,std::string weapName,bool bPassive)
+{
+	std::map<std::string, vibeDef>::iterator iter = bPassive? vibePassives.find(weapName) : vibeDefs.find(weapName);
+	int currTime = GetCurrTime();
+	
+	//std::map<std::string, vibeDef>::iterator vP_iter = vibePassives.find(weapName);
+	if ((!bPassive && iter != vibeDefs.end()) || (bPassive && iter != vibePassives.end()))
+	{
+		double deltaTime;
+		if (iter->second.bPassive) {
+			double deltaTimePassive = double(currTime - startPassive);
+			startPassive = deltaTimePassive >= iter->second.duration ? GetCurrTime() : startPassive;
+		}
+		else
+		{
+			double deltaTime = double(currTime - startTime);
+		}
+		double intensity;
+		for each (vibeFunc def in iter->second.vibes)
+		{
+			if (deltaTime < def.end_time) {
+				intensity = def.coeff * deltaTime + def.intercept;
+				int int_intensity = int(ceil(intensity));
+				if (int_intensity > 3999)
+					int_intensity = 3999;
+				else if (int_intensity < 0)
+					int_intensity = 0;
+				vr_ptr->TriggerHapticPulse(device, 0, int_intensity);
+			}
+		}
+		
+	}
+}
+bool bFiring = false;
+bool bhadReloading = false;
+std::string lastWeapon;
+static void HandleVibrations(int device) 
+{
+
+	if (players[consoleplayer].damagecount > 0) {
+		if (players[consoleplayer].damagecount > 60) {                                                                                                                                        
+			vr_ptr->TriggerHapticPulse(device, 0, 3000);
+			lastVibe = 3000;
+		}
+		else if (players[consoleplayer].damagecount > 30) {
+			vr_ptr->TriggerHapticPulse(device, 0, 2000);
+			lastVibe = 2000;
+		}
+		else {
+			vr_ptr->TriggerHapticPulse(device, 0, 1000);
+			lastVibe = 1000;
+		}
+	}
+
+	if ((openvr_rightHanded && device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_RightHand))
+		|| (!openvr_rightHanded && device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_LeftHand)))
+	{
+		
+
+		if (players[consoleplayer].ReadyWeapon != nullptr) 
+		{
+
+
+			/*int i;
+			int j;
+			Bindings.GetKeysForCommand("reloader", &i, &j);
+			if ((players[consoleplayer].oldbuttons & i) == i || (players[consoleplayer].oldbuttons & j) == j)
+				Printf("Reloading...");
+			else
+				Printf(std::to_string(players[consoleplayer].original_oldbuttons).c_str());*/
+			//if (players[consoleplayer].mo->Inventory->FindInventory(FName("Reloading")) != NULL)
+			/*if(Button_Reload.bDown)
+				Printf("Reloading...\n");
+			*/
+			std::string weaponName = std::string(players[consoleplayer].ReadyWeapon->GetClass()->TypeName.GetChars());
+			std::map<std::string, vibeDef>::iterator iter = vibeDefs.find(weaponName);
+			if (!weaponName._Equal(lastWeapon)) {
+				startTime = 0;
+				startPassive = 0;
+				AActor* ammo1 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo1);
+				if (ammo1 != nullptr) {
+					Printf("TYPE 1: ");
+					Printf(ammo1->GetClass()->TypeName);
+					int ammo1_amount = ammo1->IntVar(NAME_Amount);
+					Printf(" COUNT: ");
+					Printf(std::to_string(ammo1_amount).c_str());
+					Printf("\n");
+				}
+				AActor* ammo2 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo2);
+				if (ammo2 != nullptr) {
+					Printf("TYPE 2: ");
+					Printf(ammo2->GetClass()->TypeName);
+					int ammo2_amount = ammo2->IntVar(NAME_Amount);
+					Printf(" COUNT: ");
+					Printf(std::to_string(ammo2_amount).c_str());
+					Printf("\n");
+				}
+				ReportDetails(device, weaponName, false);
+				ReportDetails(device, weaponName, true);
+				
+			}
+				
+			lastWeapon = weaponName;
+			if ((players[consoleplayer].WeaponState & WF_WEAPONREADY) == WF_WEAPONREADY || players[consoleplayer].refire > lastRefire)
+			{
+				
+				bFiring = false;
+				//startTime = GetCurrTime();
+				if (players[consoleplayer].refire <= lastRefire) 
+				{
+					TriggerWeaponVibe(device,weaponName,true);
+				}
+				//Printf("Ready: Resetting...\n");
+			}
+			if (players[consoleplayer].attackdown)
+			{
+
+				if ((players[consoleplayer].WeaponState & WF_WEAPONREADY) != WF_WEAPONREADY)// == players[consoleplayer]//->FindStateByString("Fire"))
+				{
+					if (!bFiring && iter != vibeDefs.end()) {
+						//reset the vibe
+						bFiring = true;
+						startTime = GetCurrTime();
+						//iter->second.remaining = iter->second.duration;
+						
+					}
+				}
+				//Printf("%s\n", players[consoleplayer].ReadyWeapon->GetClass()->TypeName.GetChars());
+
+			}else if (!bhadReloading && players[consoleplayer].mo->FindInventory(FName("Reloading")) != NULL)
+			{
+				bhadReloading = true;
+				Printf("Reloading...");
+			}
+			if (bhadReloading) {
+				bhadReloading = players[consoleplayer].mo->FindInventory(FName("Reloading")) != NULL;
+			}
+			TriggerWeaponVibe(device, weaponName, false);
+			lastRefire = players[consoleplayer].refire;
+			//wasAttackDown = players[consoleplayer].attackdown;
+			
+			
+		}
+		
+	}
+	
+	
+	if (lastVibe > 0) {
+		lastVibe -= 100;
+		vr_ptr->TriggerHapticPulse(device, 0, lastVibe);
+	}
+}
+
+static void VibeOut() 
+{
+
+}
+
+
+
 static void HandleControllerState(int device, int role, VRControllerState_t& newState)
 {
 	VRControllerState_t& lastState = controllers[role].lastState;
@@ -1140,7 +1447,10 @@ static void HandleControllerState(int device, int role, VRControllerState_t& new
 	
 	if (CurrentMenu == nullptr) //the quit menu is cancelled by any normal keypress, so don't generate the fire while in menus 
 	{
+
+		HandleVibrations(device);
 		HandleVRAxis(lastState, newState, 1, 0, KEY_JOY4, KEY_JOY4, controller * (KEY_PAD_RTRIGGER - KEY_JOY4));
+		
 	}
 	HandleUIVRAxis(lastState, newState, 1, 0, GK_RETURN, GK_RETURN);
 
@@ -1331,10 +1641,8 @@ void OpenVRMode::SetUp() const
 						}
 					}
 				}
-
-				HandleControllerState(i, role, newState);
-
 				
+				HandleControllerState(i, role, newState);
 			}
 		}
 
