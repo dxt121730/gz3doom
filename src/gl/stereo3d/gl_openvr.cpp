@@ -143,6 +143,8 @@ EXTERN_CVAR(Float, openvr_weaponScale);
 CVAR(Float, openvr_kill_momentum, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, openvr_hudDistance, 0.4f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 CVAR(Float, openvr_hudPitch, -8.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+CVAR(Bool, openvr_fixPitch,false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+CVAR(Bool, openvr_fixRoll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 const float DEAD_ZONE = 0.25f;
 
@@ -755,6 +757,7 @@ VSMatrix OpenVREyePose::getQuadInWorld(
 	float distance, // meters
 	float width, // meters 
 	bool doFixPitch,
+	bool doFixRoll,
 	float pitchOffset) const 
 {
 	VSMatrix new_projection;
@@ -776,8 +779,10 @@ VSMatrix OpenVREyePose::getQuadInWorld(
 
 	// Follow HMD orientation, EXCEPT for roll angle (keep weapon upright)
 	if (activeEye->currentPose) {
-		float openVrRollDegrees = RAD2DEG(-eulerAnglesFromMatrix(activeEye->currentPose->mDeviceToAbsoluteTracking).v[2]);
-		new_projection.rotate(-openVrRollDegrees, 0, 0, 1);
+		if (doFixRoll) {
+			float openVrRollDegrees = RAD2DEG(-eulerAnglesFromMatrix(activeEye->currentPose->mDeviceToAbsoluteTracking).v[2]);
+			new_projection.rotate(-openVrRollDegrees, 0, 0, 1);
+		}
 
 		if (doFixPitch) {
 			float openVrPitchDegrees = RAD2DEG(-eulerAnglesFromMatrix(activeEye->currentPose->mDeviceToAbsoluteTracking).v[1]);
@@ -838,7 +843,8 @@ void OpenVREyePose::AdjustHud() const
 		di->VPUniforms.mProjectionMatrix = getQuadInWorld(
 			crosshair_distance_meters,
 			crosshair_width_meters,
-			false,
+			openvr_fixPitch,
+			openvr_fixRoll,
 			0.0);
 		ApplyVPUniforms(di);
 		::Draw2D(openVrMode->crossHairDrawer, gl_RenderState, true);
@@ -851,7 +857,8 @@ void OpenVREyePose::AdjustHud() const
 	di->VPUniforms.mProjectionMatrix = getQuadInWorld(
 		menu_distance_meters, 
 		menu_width_meters, 
-		true,
+		openvr_fixPitch,
+		openvr_fixRoll,
 		pitch_offset);
 	ApplyVPUniforms(di);
 	di->EndDrawInfo();
