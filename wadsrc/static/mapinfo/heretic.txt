@@ -36,8 +36,8 @@ gameinfo
 	weaponslot = 5, "SkullRod"
 	weaponslot = 6, "PhoenixRod"
 	weaponslot = 7, "Mace"
-	dimcolor = "00 00 ff"
-	dimamount = 0.2
+	dimcolor = "00 00 40"
+	dimamount = 0.5
 	bluramount = 0
 	menuslidercolor = "Orange"
 	definventorymaxamount = 16
@@ -63,13 +63,15 @@ gameinfo
 	textscreeny = 5
 	defaultendsequence = "Inter_Pic1"
 	maparrow = "maparrows/dagger.txt"
-	statscreen_mapnamefont = "BigFont"
-	statscreen_finishedfont = "SmallFont"
-	statscreen_enteringfont = "SmallFont"
+	statscreen_mapnamefont = "*BigFont"
+	statscreen_finishedfont = "*SmallFont"
+	statscreen_enteringfont = "*SmallFont"
 	statscreen_coop = "CoopStatusScreen"
 	statscreen_dm = "DeathmatchStatusScreen"
 	statscreen_single = "RavenStatusScreen"
 	messageboxclass = "MessageBoxMenu"
+	normforwardmove = 0x19, 0x32
+	normsidemove = 0x18, 0x28
 }
 
 DoomEdNums
