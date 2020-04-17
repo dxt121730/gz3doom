@@ -210,8 +210,6 @@ namespace s3d
 	
 	static void LoadVibeDefs()
 	{
-		std::ifstream inFile;
-		
 		std::string path("./Exports/");
 		std::string ext(".vibe");
 		std::vector<std::string> vibeFiles;
@@ -219,11 +217,12 @@ namespace s3d
 			vibeFiles.push_back(entry.path().string());
 		for each (std::string pathStr in vibeFiles)
 		{
+			std::ifstream inFile;
 			if (pathStr.find(ext) == std::string::npos)
 				continue;
 			inFile.open(pathStr);
 			if (!inFile) {
-				Printf("%s not found\n", path.c_str());
+				continue;
 			}
 			else {
 				vibeDef vibe;
@@ -284,6 +283,7 @@ namespace s3d
 
 				}
 			}
+			inFile.close();
 		}
 
 	}
@@ -1255,8 +1255,8 @@ static int GetCurrTime() {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-int startTime = 0;
-
+int startFireTic = 0;
+int startPassiveTic = 0;
 
 static void ReportDetails(int device, std::string weapName, bool bPassive)
 {
@@ -1284,40 +1284,49 @@ static void ReportDetails(int device, std::string weapName, bool bPassive)
 		Printf("DONE");
 	}
 }
-int startPassive;
+
 static void TriggerWeaponVibe(int device,std::string weapName,bool bPassive)
 {
 	std::map<std::string, vibeDef>::iterator iter = bPassive? vibePassives.find(weapName) : vibeDefs.find(weapName);
-	int currTime = GetCurrTime();
+	//int currTime = GetCurrTime();
 	
 	//std::map<std::string, vibeDef>::iterator vP_iter = vibePassives.find(weapName);
 	if ((!bPassive && iter != vibeDefs.end()) || (bPassive && iter != vibePassives.end()))
 	{
-		double deltaTime;
+		int deltaTime;
 		if (iter->second.bPassive) {
-			deltaTime = double(currTime - startPassive);
-			if (iter->second.bTicMode)
-				deltaTime /= 24;
-			startPassive = deltaTime >= iter->second.duration ? GetCurrTime() : startPassive;
+			deltaTime = double(gametic - startPassiveTic);
+			if (!iter->second.bTicMode)
+				deltaTime = (deltaTime * 1000) / TICRATE;
+			startPassiveTic = deltaTime >= iter->second.duration ? gametic : startPassiveTic;
+			//Printf("Passive:%s\n",std::to_string(deltaTime));
 		}
 		else
 		{
-			deltaTime = double(currTime - startTime);
-			if (iter->second.bTicMode)
-				deltaTime /= 24;
+			deltaTime = double(gametic - startFireTic);
+			if (!iter->second.bTicMode)
+				deltaTime = (deltaTime * 1000) / TICRATE;
 		}
 
 		double intensity;
 		for each (vibeFunc def in iter->second.vibes)
 		{
-			if (deltaTime < def.end_time) {
-				intensity = def.coeff * deltaTime + def.intercept;
+			if (deltaTime <= def.end_time) {
+				int deltaTime_relative = deltaTime - def.start_time;
+				intensity = def.coeff * deltaTime_relative + def.intercept;
 				int int_intensity = int(ceil(intensity));
 				if (int_intensity > 3999)
 					int_intensity = 3999;
 				else if (int_intensity < 0)
 					int_intensity = 0;
+				if (int_intensity != 0) {
+					//Printf("TIC: %s ", std::to_string(gametic).c_str());
+					//Printf("MS: %s", std::to_string(deltaTime).c_str());
+					//Printf("INT: %s\n", std::to_string(int_intensity).c_str());
+				}
+					
 				vr_ptr->TriggerHapticPulse(device, 0, int_intensity);
+				break;
 			}
 		}
 		
@@ -1329,7 +1338,7 @@ std::string lastWeapon;
 static void HandleVibrations(int device) 
 {
 
-	if (players[consoleplayer].damagecount > 0) {
+	/*if (players[consoleplayer].damagecount > 0) {
 		if (players[consoleplayer].damagecount > 60) {                                                                                                                                        
 			vr_ptr->TriggerHapticPulse(device, 0, 3000);
 			lastVibe = 3000;
@@ -1342,10 +1351,13 @@ static void HandleVibrations(int device)
 			vr_ptr->TriggerHapticPulse(device, 0, 1000);
 			lastVibe = 1000;
 		}
-	}
+	}*/
 
 	if ((openvr_rightHanded && device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_RightHand))
 		|| (!openvr_rightHanded && device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_LeftHand)))
+
+	/*if ((device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_RightHand))
+		|| (device == vr_ptr->GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole::ETrackedControllerRole_TrackedControllerRole_LeftHand)))*/
 	{
 		
 
@@ -1367,9 +1379,9 @@ static void HandleVibrations(int device)
 			std::string weaponName = std::string(players[consoleplayer].ReadyWeapon->GetClass()->TypeName.GetChars());
 			std::map<std::string, vibeDef>::iterator iter = vibeDefs.find(weaponName);
 			if (!weaponName._Equal(lastWeapon)) {
-				startTime = 0;
-				startPassive = 0;
-				AActor* ammo1 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo1);
+				startFireTic = 0;
+				startPassiveTic = 0;
+				/*AActor* ammo1 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo1);
 				if (ammo1 != nullptr) {
 					Printf("TYPE 1: ");
 					Printf(ammo1->GetClass()->TypeName);
@@ -1386,9 +1398,9 @@ static void HandleVibrations(int device)
 					Printf(" COUNT: ");
 					Printf(std::to_string(ammo2_amount).c_str());
 					Printf("\n");
-				}
-				ReportDetails(device, weaponName, false);
-				ReportDetails(device, weaponName, true);
+				}*/
+				//ReportDetails(device, weaponName, false);
+				//ReportDetails(device, weaponName, true);
 				
 			}
 				
@@ -1406,14 +1418,42 @@ static void HandleVibrations(int device)
 			}
 			if (players[consoleplayer].attackdown)
 			{
+				//AActor* ammo2 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo2);
+				//if (ammo2 != nullptr) {
+				//	/*Printf("TYPE 2: ");
+				//	Printf(ammo2->GetClass()->TypeName);*/
+				//	int ammo2_amount = ammo2->IntVar(NAME_Amount);
+				//	if (ammo2_amount == 1)
+				//		Printf("RELOADING...");
+				//	else
+				//		Printf("AMMO: %s", std::to_string(ammo2_amount).c_str());
+				//	/*Printf(" COUNT: ");
+				//	Printf(std::to_string(ammo2_amount).c_str());
+				//	Printf("\n");*/
+				//}
 
 				if ((players[consoleplayer].WeaponState & WF_WEAPONREADY) != WF_WEAPONREADY)// == players[consoleplayer]//->FindStateByString("Fire"))
 				{
-					if (!bFiring && iter != vibeDefs.end()) {
+					if (!bFiring){// && iter != vibeDefs.end()) {
 						//reset the vibe
 						bFiring = true;
-						startTime = GetCurrTime();
-						//iter->second.remaining = iter->second.duration;
+						startFireTic = gametic;
+
+						//===CODE FOR EVENTUAL RELOAD VIBRATION (BD64 STYLE)===
+						//AActor* ammo1 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo1);
+						//AActor* ammo2 = players[consoleplayer].ReadyWeapon->PointerVar<AActor>(NAME_Ammo2);
+						//if (ammo1 != nullptr && ammo2 != nullptr) {
+						//	/*Printf("TYPE 2: ");
+						//	Printf(ammo2->GetClass()->TypeName);*/
+						//	int ammo1_amount = ammo1->IntVar(NAME_Amount);
+						//	int ammo2_amount = ammo2->IntVar(NAME_Amount);
+						//	if (ammo1_amount > 0 && ammo2_amount == 1)
+						//		Printf("RELOADING...");
+						//	/*Printf(" COUNT: ");
+						//	Printf(std::to_string(ammo2_amount).c_str());
+						//	Printf("\n");*/
+						//}
+						////iter->second.remaining = iter->second.duration;
 						
 					}
 				}
@@ -1421,11 +1461,13 @@ static void HandleVibrations(int device)
 
 			}else if (!bhadReloading && players[consoleplayer].mo->FindInventory(FName("Reloading")) != NULL)
 			{
-				bhadReloading = true;
-				Printf("Reloading...");
+				//===CODE FOR EVENTUAL RELOAD VIBRATION (BD64 STYLE)===
+				/*bhadReloading = true;
+				Printf("RELOADING...");*/
 			}
 			if (bhadReloading) {
-				bhadReloading = players[consoleplayer].mo->FindInventory(FName("Reloading")) != NULL;
+				//===CODE FOR EVENTUAL RELOAD VIBRATION (BD64 STYLE)===
+				//bhadReloading = players[consoleplayer].mo->FindInventory(FName("Reloading")) != NULL;
 			}
 			TriggerWeaponVibe(device, weaponName, false);
 			lastRefire = players[consoleplayer].refire;
